@@ -306,7 +306,7 @@ def main() -> int:
         "--constraints",
         type=Path,
         default=None,
-        help="Extra pip constraints file for the main requirements install (e.g. packaging/constraints-macos-x64.txt pinning the last versions that publish Intel macOS wheels).",
+        help="Extra pip constraints file for the main requirements install (e.g. pinning versions that still publish wheels for a legacy platform).",
     )
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the frozen-executable smoke tests.")
     args = parser.parse_args()

@@ -1,7 +1,7 @@
 name: Desktop build
 
 # Builds directly runnable Lumina Studio desktop packages for
-# Windows / Linux / macOS on both x86-64 and ARM64.
+# Windows on x86-64 and ARM64.
 #
 # How a package is assembled (see docs/desktop-packaging.md):
 #   1. frontend  — the React app is built once (arch-independent).
@@ -10,19 +10,13 @@ name: Desktop build
 #                  smoke-tested with the backend's own self-test commands
 #                  plus a /api/health round-trip, then electron-builder
 #                  wraps the Electron shell with the frozen backend and
-#                  the built frontend as resources, and the packaged
-#                  backend is smoke-tested again from inside the package.
+#                  the built frontend as resources.
 #
 # Platform notes:
 #   * Windows ARM64 ships a native ARM64 Electron shell with an x64
 #     backend: OpenCV (opencv-python) and the pinned native 3MF/SVG packages publish no
 #     win-arm64 wheels, and the x64 backend runs under Windows-on-ARM
 #     emulation. The backend leg therefore uses the x64 Python.
-#   * Linux ARM64 and Intel macOS build the pinned native packages from
-#     source (no wheels exist for those platforms): fatcat-metadata and
-#     neroued-3mf via the repository's own pinned-source wheel builder,
-#     neroued-vectorizer from its sdist; Linux ARM64 additionally builds
-#     lumina-svg-core from its sdist.
 
 on:
   workflow_dispatch:
@@ -74,9 +68,8 @@ jobs:
   desktop:
     name: Desktop (${{ matrix.id }})
     # One job per platform end to end (backend build -> Electron package):
-    # legs are fully independent, so a queued/cancelled runner on one
-    # platform (macOS capacity is bursty) never starves the others, and
-    # the backend bundle never round-trips through artifact storage.
+    # legs are fully independent, and the backend bundle never
+    # round-trips through artifact storage.
     needs: [frontend]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -97,28 +90,6 @@ jobs:
             python-arch: x64
             build-args: ""
             builder-args: --win --arm64
-          - id: linux-x64
-            runner: ubuntu-22.04
-            python-arch: x64
-            build-args: ""
-            builder-args: --linux --x64
-          - id: linux-arm64
-            runner: ubuntu-24.04-arm
-            python-arch: arm64
-            build-args: "--source-native --svg-core-source"
-            builder-args: --linux --arm64
-          - id: macos-arm64
-            runner: macos-15
-            python-arch: arm64
-            build-args: ""
-            builder-args: --mac --arm64
-          - id: macos-x64
-            runner: macos-15-intel
-            python-arch: x64
-            # constraints pin numba/llvmlite/rawpy to the last versions
-            # with Intel macOS wheels (see the constraints file header)
-            build-args: "--source-native --constraints packaging/constraints-macos-x64.txt"
-            builder-args: --mac --x64
     steps:
       - uses: actions/checkout@v4
 
@@ -127,29 +98,6 @@ jobs:
         with:
           python-version: "3.12"
           architecture: ${{ matrix.python-arch }}
-
-      # neroued-vectorizer's CMake build does find_package(OpenCV 4.5)
-      # and requires libpotrace; neither is provided by any pip wheel
-      # (opencv-python ships no CMake config). These are exactly the
-      # system packages the package's own CI installs
-      # (ci/install-deps-macos.sh: brew install opencv potrace; the Linux
-      # script builds the same two libraries from source — Ubuntu 24.04's
-      # libopencv-dev 4.6 / libpotrace-dev satisfy them directly).
-      - name: Install vectorizer system dependencies (Linux ARM64)
-        if: matrix.id == 'linux-arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopencv-dev libpotrace-dev
-
-      - name: Install vectorizer system dependencies (Intel macOS)
-        if: matrix.id == 'macos-x64'
-        run: |
-          # opencv@4, not opencv: the vectorizer asks CMake for
-          # OpenCV 4.5 and a 5.x config is rejected as incompatible.
-          # The versioned formula is keg-only, so publish its prefix
-          # for the build step's CMake.
-          brew install opencv@4 potrace
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix opencv@4)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and smoke-test backend bundle
         shell: bash
@@ -207,60 +155,6 @@ jobs:
 
       - name: Build desktop package
         run: pnpm --dir electron exec electron-builder --config electron-builder.yml ${{ matrix.builder-args }} --publish never
-
-      - name: Smoke-test packaged backend (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          appimage="$(ls electron/dist/*.AppImage | head -n 1)"
-          chmod +x "$appimage"
-          workdir="$(mktemp -d)"
-          (cd "$workdir" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
-          backend="$workdir/squashfs-root/resources/backend/lumina-backend"
-          test -x "$backend"
-          test -f "$workdir/squashfs-root/resources/frontend/index.html"
-          "$backend" --svg-hole-compensation-self-test
-
-      - name: Smoke-test packaged backend (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          app="$(ls -d electron/dist/mac*/Lumina\ Studio.app | head -n 1)"
-          backend="$app/Contents/Resources/backend/lumina-backend"
-          test -x "$backend"
-          test -f "$app/Contents/Resources/frontend/index.html"
-          "$backend" --svg-hole-compensation-self-test
-
-      - name: Diagnose package smoke failure
-        if: failure()
-        shell: bash
-        run: |
-          {
-            echo '## Package layout'
-            echo '```text'
-            find electron/dist -maxdepth 5 | head -n 120 || true
-            echo '```'
-            echo '## Backend binary probe'
-            echo '```text'
-            backend="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
-            echo "backend: $backend"
-            file "$backend" || true
-            ls -la "$(dirname "$backend")" || true
-            "$backend" --svg-hole-compensation-self-test 2>&1 | tail -n 30 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          probe="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
-          {
-            echo "backend path: $probe"
-            ls -la "$(dirname "$probe")" 2>/dev/null | head -n 6
-            file "$probe" 2>/dev/null
-            "$probe" --svg-hole-compensation-self-test 2>&1 | tail -n 10
-          } | while IFS= read -r line; do
-            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
-            echo "::error title=package-probe::$esc"
-          done
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v4

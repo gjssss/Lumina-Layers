@@ -1,17 +1,15 @@
 # 桌面端打包（GitHub Actions）
 
 `Desktop build` workflow（`.github/workflows/desktop-build.yml`）把 Lumina Studio
-打包成可直接运行的桌面应用，覆盖 Windows / Linux / macOS 的 x86-64 与 ARM64
-共 6 个组合。手动触发（Actions 页 Run workflow）只产出构建 artifact；推送
-`v*` 标签时还会把 6 个平台的产物汇总发布为 GitHub Release。
+打包成可直接运行的 Windows 桌面应用，覆盖 x86-64 与 ARM64 两个组合。
+手动触发（Actions 页 Run workflow）只产出构建 artifact；推送
+`v*` 标签时还会把两个平台的产物汇总发布为 GitHub Release。
 
 ## 产物
 
 | 平台 | 产物 | 说明 |
 | --- | --- | --- |
-| Windows x64 / ARM64 | `*-win-x64.exe`（安装版 NSIS）、`*-win-portable.exe`（便携版） | 便携版双击即运行 |
-| Linux x64 / ARM64 | `*.AppImage`、`*.tar.gz` | AppImage 赋予可执行权限后直接运行 |
-| macOS arm64 / x64 | `*.dmg`、`*.zip` | 未做 Apple 签名/公证，首次打开需在右键菜单选「打开」 |
+| Windows x64 / ARM64 | `*-win-x64.exe`（安装版 NSIS）、`*-win-portable.exe`（便携版） | 便携版双击即运行；包未做代码签名，首次运行可能触发 SmartScreen 提示 |
 
 ## 打包结构
 
@@ -29,19 +27,10 @@
 系统用户数据目录：后端在打包模式下由主进程注入 `LUMINA_OUTPUT_DIR`，
 `config.py` 据此把 `output/` 放到用户数据目录而不是只读的安装目录。
 
-## 平台差异（与 README 的依赖支持面一致）
+## 平台差异
 
-README 已说明完整原生依赖的 wheel 只覆盖 Windows x64、Linux x86-64、
-macOS arm64。本工作流对另外三个组合的处理：
-
-- **Intel macOS**：`fatcat-metadata`、`neroued-3mf`、`neroued-vectorizer`
-  无 x86-64 wheel，CI 中从源码构建（`--source-native`）：前两个走仓库
-  自带的固定提交 wheel 构建脚本（`scripts/build_3mf_native_wheels.py`），
-  vectorizer 走官方 sdist。
-- **Linux ARM64**：上述三个包外加 `lumina-svg-core` 均无 aarch64 wheel，
-  全部从源码构建（`--source-native --svg-core-source`）。ARM64 后端在
-  Ubuntu 24.04 上构建，要求 glibc ≥ 2.39 的发行版。
-- **Windows ARM64**：opencv-python 与上述原生包均无 win-arm64 wheel，源码构建
+- **Windows ARM64**：opencv-python 与 fatcat-metadata、neroued-3mf、
+  neroued-vectorizer、lumina-svg-core 均无 win-arm64 wheel，源码构建
   不可行。该包是原生 ARM64 Electron 壳 + x64 后端，后端在
   Windows-on-ARM 仿真层下运行（Windows 11 ARM 的内置 x64 仿真）。
 
@@ -50,15 +39,13 @@ macOS arm64。本工作流对另外三个组合的处理：
 每个平台的后端在打包前必须通过 `packaging/build_backend.py` 的冒烟测试：
 后端自带的 `--material-sampling-self-test`、`--svg-hole-compensation-self-test`、
 `--native-svg-self-test`（有 fixture 时）以及一次真实的
-`GET /api/health` 往返。Linux/macOS 的打包任务还会解出成品包，
-对包内后端再跑一次自检，确保产物里的后端确实可执行。
+`GET /api/health` 往返。
 
 ## 本地复现
 
 ```bash
-# 后端（任选当前平台）
-python packaging/build_backend.py            # 支持面内的平台
-python packaging/build_backend.py --source-native   # Intel Mac 等无 wheel 平台
+# 后端（在 Windows 上）
+python packaging/build_backend.py
 
 # 前端与打包
 pnpm --dir frontend install --frozen-lockfile && pnpm --dir frontend build
