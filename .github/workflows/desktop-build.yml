@@ -135,6 +135,12 @@ jobs:
             tail -n 150 "$RUNNER_TEMP/backend-build.log" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # Mirror the decisive last lines into job annotations so the
+          # failure is readable through the API without the log viewer.
+          tail -n 12 "$RUNNER_TEMP/backend-build.log" | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=backend-log-tail::$esc"
+          done
 
       - name: Upload backend bundle
         uses: actions/upload-artifact@v4
