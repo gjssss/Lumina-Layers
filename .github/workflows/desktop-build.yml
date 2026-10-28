@@ -245,7 +245,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           appimage="$(ls electron/dist/*.AppImage | head -n 1)"
           chmod +x "$appimage"
           workdir="$(mktemp -d)"
@@ -259,7 +259,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           app="$(ls -d electron/dist/mac*/Lumina\ Studio.app | head -n 1)"
           backend="$app/Contents/Resources/backend/lumina-backend"
           test -x "$backend"
@@ -273,20 +273,26 @@ jobs:
           {
             echo '## Package layout'
             echo '```text'
-            find electron/dist -maxdepth 4 | head -n 120 || true
+            find electron/dist -maxdepth 5 | head -n 120 || true
             echo '```'
             echo '## Backend binary probe'
             echo '```text'
-            backend="$(find electron/dist -path '*Resources/backend/lumina-backend' -o -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
+            backend="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
             echo "backend: $backend"
             file "$backend" || true
             ls -la "$(dirname "$backend")" || true
             "$backend" --svg-hole-compensation-self-test 2>&1 | tail -n 30 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          find electron/dist -maxdepth 4 2>/dev/null | head -n 40 | while IFS= read -r line; do
+          probe="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
+          {
+            echo "backend path: $probe"
+            ls -la "$(dirname "$probe")" 2>/dev/null | head -n 6
+            file "$probe" 2>/dev/null
+            "$probe" --svg-hole-compensation-self-test 2>&1 | tail -n 10
+          } | while IFS= read -r line; do
             esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
-            echo "::error title=package-layout::$esc"
+            echo "::error title=package-probe::$esc"
           done
 
       - name: Upload desktop package
