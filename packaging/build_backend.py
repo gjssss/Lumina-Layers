@@ -7,13 +7,14 @@ This script is the single entry point used by the desktop build workflow
    (CI selects the interpreter architecture per leg — notably, the Windows
    ARM64 leg deliberately runs the x64 interpreter so the bundled backend
    uses the x64 wheels and runs under Windows-on-ARM emulation, because
-   SciPy and the pinned native 3MF/SVG packages publish no win-arm64 wheels);
+   opencv-python and the pinned native 3MF/SVG packages publish no win-arm64 wheels);
 2. installs ``requirements.txt`` — on legs flagged ``--source-native`` the
    pinned native packages whose wheels do not cover the target platform
-   (fatcat-metadata, neroued-3mf, neroued-vectorizer, and on Linux ARM64
-   also lumina-svg-core) are instead built from their published source
-   distributions, which the repository's own docs describe as the
-   maintainer path (docs/desktop-electron.md);
+   are built from source instead: fatcat-metadata and neroued-3mf through
+   the repository's own pinned-source wheel builder
+   (scripts/build_3mf_native_wheels.py, the maintainer path documented in
+   docs/desktop-electron.md), neroued-vectorizer — and on Linux ARM64 also
+   lumina-svg-core — from their published source distributions;
 3. freezes ``api_server.py`` with PyInstaller using
    ``packaging/lumina-backend.spec``;
 4. smoke-tests the frozen executable with the backend's own diagnostic
@@ -104,28 +105,80 @@ def filtered_requirements(excluded: set[str]) -> Path:
     return target
 
 
-def install_dependencies(python: Path, source_native: bool, svg_core_source: bool) -> None:
+# Pinned upstream sources for the two 3MF native packages, mirroring
+# scripts/fatcat_packaging_contract.py (the contract module is the source
+# of truth; the build script below re-verifies both commits and refuses
+# anything else).
+FATCAT_REPO = "https://github.com/MOVIBALE/fatcat-metadata.git"
+FATCAT_COMMIT = "5023982e03680e0cd89fb9175dd0ca401d41f6f4"
+NEROUED_REPO = "https://github.com/Neroued/neroued_3mf.git"
+NEROUED_COMMIT = "656f87c55caf742cef2e958a7fc5199cdba2c6f0"
+
+
+def build_pinned_native_wheels(python: Path) -> None:
+    """Build fatcat-metadata + neroued-3mf with the repo's own script.
+
+    The published sdists are not relied on: docs/desktop-electron.md
+    documents this maintainer path (scripts/build_3mf_native_wheels.py),
+    which clones-at-pinned-commits, builds both wheels and installs the
+    exact artifacts after hash verification.
+    """
+    src_dir = PACKAGING_DIR / "native-src"
+    if src_dir.exists():
+        shutil.rmtree(src_dir)
+    src_dir.mkdir(parents=True)
+    fatcat_root = src_dir / "fatcat-metadata"
+    neroued_root = src_dir / "neroued_3mf"
+    run(["git", "clone", FATCAT_REPO, str(fatcat_root)])
+    run(["git", "-C", str(fatcat_root), "checkout", FATCAT_COMMIT])
+    run(["git", "clone", NEROUED_REPO, str(neroued_root)])
+    run(["git", "-C", str(neroued_root), "checkout", NEROUED_COMMIT])
+    run([str(python), "-m", "pip", "install", "build"])
+    run(
+        [
+            str(python),
+            str(ROOT / "scripts" / "build_3mf_native_wheels.py"),
+            "--fatcat-root", str(fatcat_root),
+            "--neroued-source", str(neroued_root),
+            "--install",
+        ],
+        cwd=ROOT,
+    )
+
+
+def install_dependencies(
+    python: Path,
+    source_native: bool,
+    svg_core_source: bool,
+    constraints: Path | None = None,
+) -> None:
+    constraint_args = ["-c", str(constraints)] if constraints else []
     if not source_native and not svg_core_source:
-        run([str(python), "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
+        run([str(python), "-m", "pip", "install", *constraint_args, "-r", str(ROOT / "requirements.txt")])
     else:
         excluded = {"fatcat-metadata", "neroued-3mf", "neroued-vectorizer"}
         if svg_core_source:
             excluded.add("lumina-svg-core")
         requirements = filtered_requirements(excluded)
-        run([str(python), "-m", "pip", "install", "-r", str(requirements)])
-        source_packages = [SOURCE_NATIVE_PINS[name] for name in sorted(excluded)]
-        # --no-binary makes pip build the pinned packages from their
-        # published source distributions; build isolation supplies
-        # scikit-build-core/CMake (and maturin for lumina-svg-core, which
-        # additionally needs a Rust toolchain on PATH — the workflow
-        # installs one on the Linux ARM64 leg).
-        run(
-            [
-                str(python), "-m", "pip", "install",
-                "--no-binary", ",".join(sorted(excluded)),
-                *source_packages,
-            ]
-        )
+        run([str(python), "-m", "pip", "install", *constraint_args, "-r", str(requirements)])
+        # fatcat-metadata / neroued-3mf come from the repository's own
+        # pinned-source wheel builder, not from pip sdists.
+        build_pinned_native_wheels(python)
+        # --no-binary makes pip build the remaining pinned packages from
+        # their published source distributions (both are scikit-build-core
+        # C++ builds; build isolation supplies CMake/pybind11). Installed
+        # one at a time so a failure names the exact package.
+        pip_source = ["neroued-vectorizer"]
+        if svg_core_source:
+            pip_source.append("lumina-svg-core")
+        for name in pip_source:
+            run(
+                [
+                    str(python), "-m", "pip", "install",
+                    "--no-binary", name,
+                    SOURCE_NATIVE_PINS[name],
+                ]
+            )
     run([str(python), "-m", "pip", "install", PYINSTALLER_REQUIREMENT])
 
 
@@ -247,13 +300,20 @@ def main() -> int:
     parser.add_argument(
         "--svg-core-source",
         action="store_true",
-        help="Also build lumina-svg-core from source (Linux ARM64; needs a Rust toolchain). Implies --source-native handling for it.",
+        help="Also build lumina-svg-core from source (Linux ARM64). Implies --source-native handling for it.",
+    )
+    parser.add_argument(
+        "--constraints",
+        type=Path,
+        default=None,
+        help="Extra pip constraints file for the main requirements install (e.g. packaging/constraints-macos-x64.txt pinning the last versions that publish Intel macOS wheels).",
     )
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the frozen-executable smoke tests.")
     args = parser.parse_args()
 
+    constraints = (ROOT / args.constraints).resolve() if args.constraints else None
     python = create_venv()
-    install_dependencies(python, args.source_native, args.svg_core_source)
+    install_dependencies(python, args.source_native, args.svg_core_source, constraints)
     exe = freeze(python)
     if not args.skip_smoke:
         smoke(exe)

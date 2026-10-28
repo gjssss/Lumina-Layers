@@ -5,22 +5,24 @@ name: Desktop build
 #
 # How a package is assembled (see docs/desktop-packaging.md):
 #   1. frontend  — the React app is built once (arch-independent).
-#   2. backend   — api_server.py is frozen per platform with PyInstaller
-#                  (packaging/build_backend.py) and smoke-tested with the
-#                  backend's own self-test commands plus a /api/health
-#                  round-trip before it is allowed into a package.
-#   3. package   — electron-builder wraps the Electron shell with the
-#                  frozen backend and the built frontend as resources.
+#   2. desktop   — one independent job per platform: api_server.py is
+#                  frozen with PyInstaller (packaging/build_backend.py),
+#                  smoke-tested with the backend's own self-test commands
+#                  plus a /api/health round-trip, then electron-builder
+#                  wraps the Electron shell with the frozen backend and
+#                  the built frontend as resources, and the packaged
+#                  backend is smoke-tested again from inside the package.
 #
 # Platform notes:
 #   * Windows ARM64 ships a native ARM64 Electron shell with an x64
-#     backend: SciPy and the pinned native 3MF/SVG packages publish no
+#     backend: OpenCV (opencv-python) and the pinned native 3MF/SVG packages publish no
 #     win-arm64 wheels, and the x64 backend runs under Windows-on-ARM
 #     emulation. The backend leg therefore uses the x64 Python.
 #   * Linux ARM64 and Intel macOS build the pinned native packages from
-#     their published source distributions (no wheels exist for those
-#     platforms); Linux ARM64 additionally builds lumina-svg-core from
-#     source and needs the Rust toolchain installed below.
+#     source (no wheels exist for those platforms): fatcat-metadata and
+#     neroued-3mf via the repository's own pinned-source wheel builder,
+#     neroued-vectorizer from its sdist; Linux ARM64 additionally builds
+#     lumina-svg-core from its sdist.
 
 on:
   workflow_dispatch:
@@ -69,10 +71,15 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-  backend:
-    name: Backend (${{ matrix.id }})
+  desktop:
+    name: Desktop (${{ matrix.id }})
+    # One job per platform end to end (backend build -> Electron package):
+    # legs are fully independent, so a queued/cancelled runner on one
+    # platform (macOS capacity is bursty) never starves the others, and
+    # the backend bundle never round-trips through artifact storage.
+    needs: [frontend]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -81,29 +88,37 @@ jobs:
             runner: windows-latest
             python-arch: x64
             build-args: ""
+            builder-args: --win --x64
           - id: windows-arm64
             runner: windows-11-arm
             # x64 Python on purpose: the bundled backend runs emulated
             # (see the header note); there are no win-arm64 wheels for
-            # SciPy / fatcat-metadata / neroued-3mf / lumina-svg-core.
+            # opencv-python / fatcat-metadata / neroued-3mf / lumina-svg-core.
             python-arch: x64
             build-args: ""
+            builder-args: --win --arm64
           - id: linux-x64
             runner: ubuntu-22.04
             python-arch: x64
             build-args: ""
+            builder-args: --linux --x64
           - id: linux-arm64
             runner: ubuntu-24.04-arm
             python-arch: arm64
             build-args: "--source-native --svg-core-source"
+            builder-args: --linux --arm64
           - id: macos-arm64
             runner: macos-15
             python-arch: arm64
             build-args: ""
+            builder-args: --mac --arm64
           - id: macos-x64
             runner: macos-15-intel
             python-arch: x64
-            build-args: "--source-native"
+            # constraints pin numba/llvmlite/rawpy to the last versions
+            # with Intel macOS wheels (see the constraints file header)
+            build-args: "--source-native --constraints packaging/constraints-macos-x64.txt"
+            builder-args: --mac --x64
     steps:
       - uses: actions/checkout@v4
 
@@ -113,61 +128,63 @@ jobs:
           python-version: "3.12"
           architecture: ${{ matrix.python-arch }}
 
-      - name: Set up Rust (lumina-svg-core source build)
+      # neroued-vectorizer's CMake build does find_package(OpenCV 4.5)
+      # and requires libpotrace; neither is provided by any pip wheel
+      # (opencv-python ships no CMake config). These are exactly the
+      # system packages the package's own CI installs
+      # (ci/install-deps-macos.sh: brew install opencv potrace; the Linux
+      # script builds the same two libraries from source — Ubuntu 24.04's
+      # libopencv-dev 4.6 / libpotrace-dev satisfy them directly).
+      - name: Install vectorizer system dependencies (Linux ARM64)
         if: matrix.id == 'linux-arm64'
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopencv-dev libpotrace-dev
+
+      - name: Install vectorizer system dependencies (Intel macOS)
+        if: matrix.id == 'macos-x64'
+        run: |
+          # opencv@4, not opencv: the vectorizer asks CMake for
+          # OpenCV 4.5 and a 5.x config is rejected as incompatible.
+          # The versioned formula is keg-only, so publish its prefix
+          # for the build step's CMake.
+          brew install opencv@4 potrace
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix opencv@4)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and smoke-test backend bundle
-        run: python packaging/build_backend.py ${{ matrix.build-args }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python packaging/build_backend.py ${{ matrix.build-args }} 2>&1 | tee "$RUNNER_TEMP/backend-build.log"
 
-      - name: Upload backend bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-${{ matrix.id }}
-          path: packaging/dist/lumina-backend
-          if-no-files-found: error
-
-  package:
-    name: Package (${{ matrix.id }})
-    needs: [frontend, backend]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: windows-x64
-            runner: windows-latest
-            builder-args: --win --x64
-          - id: windows-arm64
-            runner: windows-11-arm
-            builder-args: --win --arm64
-          - id: linux-x64
-            runner: ubuntu-22.04
-            builder-args: --linux --x64
-          - id: linux-arm64
-            runner: ubuntu-24.04-arm
-            builder-args: --linux --arm64
-          - id: macos-arm64
-            runner: macos-15
-            builder-args: --mac --arm64
-          - id: macos-x64
-            runner: macos-15-intel
-            builder-args: --mac --x64
-    steps:
-      - uses: actions/checkout@v4
+      - name: Report backend build failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '## Backend build log (last 150 lines)'
+            echo '```text'
+            tail -n 150 "$RUNNER_TEMP/backend-build.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Mirror the decisive lines into job annotations so the failure
+          # is readable through the API without the log viewer: the echoed
+          # commands plus error-looking lines, then the log tail.
+          grep -E '^\[build_backend\] \+|ERROR|Error|error:|Could not|No such|not found|Failed' \
+            "$RUNNER_TEMP/backend-build.log" | tail -n 14 | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=backend-log-key::$esc"
+          done
+          tail -n 12 "$RUNNER_TEMP/backend-build.log" | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=backend-log-tail::$esc"
+          done
 
       - name: Download frontend dist
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
-
-      - name: Download backend bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-${{ matrix.id }}
-          path: packaging/dist/lumina-backend
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -195,7 +212,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           appimage="$(ls electron/dist/*.AppImage | head -n 1)"
           chmod +x "$appimage"
           workdir="$(mktemp -d)"
@@ -209,12 +226,41 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           app="$(ls -d electron/dist/mac*/Lumina\ Studio.app | head -n 1)"
           backend="$app/Contents/Resources/backend/lumina-backend"
           test -x "$backend"
           test -f "$app/Contents/Resources/frontend/index.html"
           "$backend" --svg-hole-compensation-self-test
+
+      - name: Diagnose package smoke failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '## Package layout'
+            echo '```text'
+            find electron/dist -maxdepth 5 | head -n 120 || true
+            echo '```'
+            echo '## Backend binary probe'
+            echo '```text'
+            backend="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
+            echo "backend: $backend"
+            file "$backend" || true
+            ls -la "$(dirname "$backend")" || true
+            "$backend" --svg-hole-compensation-self-test 2>&1 | tail -n 30 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          probe="$(find electron/dist -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
+          {
+            echo "backend path: $probe"
+            ls -la "$(dirname "$probe")" 2>/dev/null | head -n 6
+            file "$probe" 2>/dev/null
+            "$probe" --svg-hole-compensation-self-test 2>&1 | tail -n 10
+          } | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=package-probe::$esc"
+          done
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v4
@@ -231,7 +277,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package]
+    needs: [desktop]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

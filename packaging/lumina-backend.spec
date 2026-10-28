@@ -73,6 +73,20 @@ for _package in (
 ):
     _collect(_package)
 
+# fatcat-metadata ships its runtime data as loose top-level directories in
+# site-packages (fatcat_metadata_data/, fatcat_metadata_examples/) next to
+# the compiled module; the native binding resolves them relative to its own
+# location and raises "native source profile is missing" when they are
+# absent. collect_all() cannot see them (they are not packages), so add
+# them explicitly, preserving their top-level layout.
+import sysconfig
+
+_site_packages = sysconfig.get_paths()["purelib"]
+for _data_pkg in ("fatcat_metadata_data", "fatcat_metadata_examples"):
+    _abs = os.path.join(_site_packages, _data_pkg)
+    if os.path.isdir(_abs):
+        datas.append((_abs, _data_pkg))
+
 # Application data that the backend resolves relative to its own tree
 # (config.py's _BASE_DIR). Code packages (api/, core/, utils/,
 # machine_registry/) are picked up as modules by the analysis; their
