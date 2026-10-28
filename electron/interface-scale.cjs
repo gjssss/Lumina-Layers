@@ -5,13 +5,9 @@ const { randomBytes } = require("node:crypto");
 const { isTrustedMainFrameSender } = require("./generated-file-directory.cjs");
 
 const STATE_VERSION = 1;
-// 100% lays every screen out on the same 1536×864 page, which is what a 1920×1080
-// screen at 125% system scaling gives other apps. Zoom compensates both the
-// resolution and the system scaling, so the page a component is laid out in does
-// not depend on either.
-const REFERENCE = { width: 1536, height: 864 };
+// Electron already applies native OS DPI. Display size is not a page zoom input.
 const DEFAULT_PREFERENCE = "100";
-// Interface first; each step scales the 100% layout room.
+// Explicit user-selected percentages, relative to native 100%.
 const SCALE_STEPS = Object.freeze(["80", "90", "100", "110", "125", "150", "175"]);
 const PREFERENCES = new Set(SCALE_STEPS);
 const DEFAULT_WINDOW_SIZE = { width: 1440, height: 900 };
@@ -24,27 +20,15 @@ function isInterfaceScalePreference(value) {
 }
 
 /**
- * Page zoom that lays the page out on the shared reference room.
- * The room is exact: a panel that is 23% of the window stays 23% of the
- * window on every screen, whatever its resolution or system scaling.
- */
-function referenceZoomFactor(displaySize) {
-  const width = Number(displaySize?.width);
-  const height = Number(displaySize?.height);
-  if (!(width > 0 && height > 0)) return 1;
-  return Math.min(width / REFERENCE.width, height / REFERENCE.height);
-}
-
-/**
- * Page zoom for a preference on a display of the given logical size.
- * 100% is the reference room; other steps are multiples of it.
+ * Resolve literal user zoom without compensating native display scaling.
+ * 按用户选择解析页面比例，不再额外补偿系统缩放或显示器分辨率。
+ * The second argument remains accepted for existing callers.
  */
 function resolveZoomFactor(preference, displaySize) {
   const percent = isInterfaceScalePreference(preference)
     ? Number(preference)
     : Number(DEFAULT_PREFERENCE);
-  const factor = referenceZoomFactor(displaySize) * percent / 100;
-  return Math.round(factor * 1000) / 1000;
+  return percent / 100;
 }
 
 /** Next preference for a zoom shortcut; stays put at either end. */
