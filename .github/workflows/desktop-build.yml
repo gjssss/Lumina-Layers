@@ -266,6 +266,29 @@ jobs:
           test -f "$app/Contents/Resources/frontend/index.html"
           "$backend" --svg-hole-compensation-self-test
 
+      - name: Diagnose package smoke failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '## Package layout'
+            echo '```text'
+            find electron/dist -maxdepth 4 | head -n 120 || true
+            echo '```'
+            echo '## Backend binary probe'
+            echo '```text'
+            backend="$(find electron/dist -path '*Resources/backend/lumina-backend' -o -name 'lumina-backend' -type f 2>/dev/null | head -n 1)"
+            echo "backend: $backend"
+            file "$backend" || true
+            ls -la "$(dirname "$backend")" || true
+            "$backend" --svg-hole-compensation-self-test 2>&1 | tail -n 30 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          find electron/dist -maxdepth 4 2>/dev/null | head -n 40 | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=package-layout::$esc"
+          done
+
       - name: Upload desktop package
         uses: actions/upload-artifact@v4
         with:
