@@ -17,6 +17,7 @@ const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
 const { createLauncherStartup } = require('./launcher-startup.cjs');
+const { createStaticServer } = require("./static-server.cjs");
 const { createSplashController } = require('./splash-controller.cjs');
 const launcherStartup = createLauncherStartup();
 if (launcherStartup.enabled) {
@@ -87,6 +88,18 @@ const WORKSHOP_RUNTIME_HEADER_NAMES = [
 const ROOT_DIR = path.join(__dirname, "..");
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
+// Packaged layout (electron-builder): the frozen backend bundle and the
+// pre-built frontend live in process.resourcesPath; see
+// docs/desktop-packaging.md. Source checkouts keep the historical layout
+// (.venv Python + Vite dev server under ROOT_DIR).
+const IS_PACKAGED = app.isPackaged;
+const PACKAGED_BACKEND_EXE = IS_PACKAGED
+  ? path.join(process.resourcesPath, "backend", IS_WIN ? "lumina-backend.exe" : "lumina-backend")
+  : null;
+const PACKAGED_FRONTEND_DIR = IS_PACKAGED
+  ? path.join(process.resourcesPath, "frontend")
+  : null;
+let frontendServer = null;
 const workshopSessionToken = createWorkshopSessionToken();
 let workshopSafeMode = false;
 
@@ -364,6 +377,9 @@ function findNode() {
 
 function backendRuntimeEnv() {
   const env = {
+    ...(IS_PACKAGED
+      ? { LUMINA_OUTPUT_DIR: path.join(app.getPath("userData"), "output") }
+      : {}),
     LUMINA_MATERIALS_DIR: path.join(app.getPath("userData"), "materials"),
     LUMINA_WORKSHOP_DATA_DIR: path.join(
       app.getPath("userData"),
@@ -949,6 +965,10 @@ app.on("before-quit", (event) => {
 
 app.on("will-quit", () => {
   killAllChildren();
+  if (frontendServer) {
+    frontendServer.close();
+    frontendServer = null;
+  }
 });
 
 app.on("window-all-closed", () => {
@@ -1014,17 +1034,28 @@ app.whenReady().then(async () => {
   // ── Start backend ──
   splashController?.checkpoint(2);
   let backendProc;
-  const python = findPython();
-  const apiServer = path.join(ROOT_DIR, "api_server.py");
-  logSys(`Starting backend: ${python} ${apiServer}`);
   try {
-    backendProc = await spawnChild(
-      "Backend",
-      python,
-      [apiServer],
-      ROOT_DIR,
-      backendRuntimeEnv(),
-    );
+    if (IS_PACKAGED) {
+      logSys(`Starting packaged backend: ${PACKAGED_BACKEND_EXE}`);
+      backendProc = await spawnChild(
+        "Backend",
+        PACKAGED_BACKEND_EXE,
+        [],
+        app.getPath("userData"),
+        backendRuntimeEnv(),
+      );
+    } else {
+      const python = findPython();
+      const apiServer = path.join(ROOT_DIR, "api_server.py");
+      logSys(`Starting backend: ${python} ${apiServer}`);
+      backendProc = await spawnChild(
+        "Backend",
+        python,
+        [apiServer],
+        ROOT_DIR,
+        backendRuntimeEnv(),
+      );
+    }
   } catch (err) {
     dialog.showErrorBox(
       "Backend Start Failed",
@@ -1056,30 +1087,48 @@ app.whenReady().then(async () => {
     return;
   }
 
-  // ── Start Vite dev server ──
-  const node = findNode();
-  const viteJs = path.join(
-    ROOT_DIR,
-    "frontend",
-    "node_modules",
-    "vite",
-    "bin",
-    "vite.js",
-  );
-  const frontendDir = path.join(ROOT_DIR, "frontend");
-  logSys(`Starting Vite: ${node} ${viteJs}`);
-  try {
-    await spawnChild("Frontend", node, [viteJs], frontendDir, { VITE_API_PROXY_TARGET: backendEndpoint.origin });
-  } catch (err) {
-    logErr(`Vite start failed: ${err.message}`);
-  }
+  // ── Start frontend ──
+  if (IS_PACKAGED) {
+    logSys(`Serving packaged frontend from ${PACKAGED_FRONTEND_DIR}`);
+    try {
+      frontendServer = createStaticServer({
+        rootDir: PACKAGED_FRONTEND_DIR,
+        apiTarget: backendEndpoint.origin,
+      });
+      await new Promise((resolve, reject) => {
+        frontendServer.once("error", reject);
+        frontendServer.listen(FRONTEND_PORT, "127.0.0.1", resolve);
+      });
+      logOk("Packaged frontend server is ready");
+    } catch (err) {
+      logErr(`Packaged frontend server failed: ${err.message}`);
+    }
+  } else {
+    // ── Start Vite dev server ──
+    const node = findNode();
+    const viteJs = path.join(
+      ROOT_DIR,
+      "frontend",
+      "node_modules",
+      "vite",
+      "bin",
+      "vite.js",
+    );
+    const frontendDir = path.join(ROOT_DIR, "frontend");
+    logSys(`Starting Vite: ${node} ${viteJs}`);
+    try {
+      await spawnChild("Frontend", node, [viteJs], frontendDir, { VITE_API_PROXY_TARGET: backendEndpoint.origin });
+    } catch (err) {
+      logErr(`Vite start failed: ${err.message}`);
+    }
 
-  logSys("Waiting for Vite dev server...");
-  try {
-    await waitForPort(FRONTEND_PORT, PORT_TIMEOUT_MS);
-    logOk("Vite dev server is ready");
-  } catch (err) {
-    logErr(`Vite port check failed: ${err.message}`);
+    logSys("Waiting for Vite dev server...");
+    try {
+      await waitForPort(FRONTEND_PORT, PORT_TIMEOUT_MS);
+      logOk("Vite dev server is ready");
+    } catch (err) {
+      logErr(`Vite port check failed: ${err.message}`);
+    }
   }
 
   installWorkshopSessionSecurity();

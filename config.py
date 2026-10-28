@@ -11,7 +11,24 @@ from enum import Enum
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-OUTPUT_DIR = os.path.join(_BASE_DIR, "output")
+
+def _resolve_output_dir() -> str:
+    """Resolve the mutable output root.
+    解析可写输出目录。
+
+    ``LUMINA_OUTPUT_DIR`` overrides the in-tree default; the packaged
+    desktop app sets it because its installation directory may be
+    read-only (AppImage mounts, Program Files).
+    ``LUMINA_OUTPUT_DIR`` 可覆盖源码树内默认目录；打包后的桌面应用会设置它，
+    因为安装目录可能只读（AppImage 挂载、Program Files）。
+    """
+    override = os.environ.get("LUMINA_OUTPUT_DIR", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.join(_BASE_DIR, "output")
+
+
+OUTPUT_DIR = _resolve_output_dir()
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 TEMP_DIR = os.path.join(OUTPUT_DIR, "temp")

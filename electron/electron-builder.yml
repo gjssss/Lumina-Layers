@@ -1,0 +1,59 @@
+# electron-builder configuration for the packaged Lumina Studio desktop app.
+#
+# The package contains only the Electron shell; the heavy runtime pieces are
+# staged by the desktop build workflow as extra resources:
+#   resources/backend/   PyInstaller bundle of api_server.py
+#                        (packaging/dist/lumina-backend, see packaging/)
+#   resources/frontend/  pre-built frontend/dist static files
+# electron/main.cjs detects the packaged layout via app.isPackaged and
+# spawns the bundled backend + its built-in static server instead of the
+# source checkout's .venv Python and Vite dev server.
+appId: com.luminastudio.desktop
+productName: Lumina Studio
+copyright: Copyright © Lumina Studio contributors
+artifactName: Lumina-Studio-${version}-${os}-${arch}.${ext}
+directories:
+  output: dist
+files:
+  - "*.cjs"
+  - "*.mjs"
+  - "*.html"
+  - "*.css"
+  - "*.json"
+  - assets/**
+  - splash-art/**
+  - package.json
+extraResources:
+  - from: ../packaging/dist/lumina-backend
+    to: backend
+    filter:
+      - "**/*"
+  - from: ../frontend/dist
+    to: frontend
+    filter:
+      - "**/*"
+asar: true
+win:
+  icon: assets/icon.png
+  target:
+    - nsis
+    - portable
+nsis:
+  artifactName: Lumina-Studio-${version}-win-${arch}-setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+portable:
+  artifactName: Lumina-Studio-${version}-win-${arch}-portable.${ext}
+mac:
+  icon: assets/icon.png
+  category: public.app-category.graphics-design
+  target:
+    - dmg
+    - zip
+linux:
+  icon: assets/icon.png
+  category: Graphics
+  target:
+    - AppImage
+    - tar.gz

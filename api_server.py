@@ -396,4 +396,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # No-op outside frozen builds; required so PyInstaller-packaged
+    # multiprocessing workers (spawn) re-enter as workers, not servers.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     raise SystemExit(main())
