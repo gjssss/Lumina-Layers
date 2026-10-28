@@ -146,15 +146,21 @@ def build_pinned_native_wheels(python: Path) -> None:
     )
 
 
-def install_dependencies(python: Path, source_native: bool, svg_core_source: bool) -> None:
+def install_dependencies(
+    python: Path,
+    source_native: bool,
+    svg_core_source: bool,
+    constraints: Path | None = None,
+) -> None:
+    constraint_args = ["-c", str(constraints)] if constraints else []
     if not source_native and not svg_core_source:
-        run([str(python), "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
+        run([str(python), "-m", "pip", "install", *constraint_args, "-r", str(ROOT / "requirements.txt")])
     else:
         excluded = {"fatcat-metadata", "neroued-3mf", "neroued-vectorizer"}
         if svg_core_source:
             excluded.add("lumina-svg-core")
         requirements = filtered_requirements(excluded)
-        run([str(python), "-m", "pip", "install", "-r", str(requirements)])
+        run([str(python), "-m", "pip", "install", *constraint_args, "-r", str(requirements)])
         # fatcat-metadata / neroued-3mf come from the repository's own
         # pinned-source wheel builder, not from pip sdists.
         build_pinned_native_wheels(python)
@@ -296,11 +302,18 @@ def main() -> int:
         action="store_true",
         help="Also build lumina-svg-core from source (Linux ARM64). Implies --source-native handling for it.",
     )
+    parser.add_argument(
+        "--constraints",
+        type=Path,
+        default=None,
+        help="Extra pip constraints file for the main requirements install (e.g. packaging/constraints-macos-x64.txt pinning the last versions that publish Intel macOS wheels).",
+    )
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the frozen-executable smoke tests.")
     args = parser.parse_args()
 
+    constraints = (ROOT / args.constraints).resolve() if args.constraints else None
     python = create_venv()
-    install_dependencies(python, args.source_native, args.svg_core_source)
+    install_dependencies(python, args.source_native, args.svg_core_source, constraints)
     exe = freeze(python)
     if not args.skip_smoke:
         smoke(exe)

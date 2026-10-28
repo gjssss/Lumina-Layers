@@ -106,7 +106,9 @@ jobs:
           - id: macos-x64
             runner: macos-15-intel
             python-arch: x64
-            build-args: "--source-native"
+            # constraints pin numba/llvmlite/rawpy to the last versions
+            # with Intel macOS wheels (see the constraints file header)
+            build-args: "--source-native --constraints packaging/constraints-macos-x64.txt"
     steps:
       - uses: actions/checkout@v4
 
@@ -115,6 +117,23 @@ jobs:
         with:
           python-version: "3.12"
           architecture: ${{ matrix.python-arch }}
+
+      # neroued-vectorizer's CMake build does find_package(OpenCV 4.5)
+      # and requires libpotrace; neither is provided by any pip wheel
+      # (opencv-python ships no CMake config). These are exactly the
+      # system packages the package's own CI installs
+      # (ci/install-deps-macos.sh: brew install opencv potrace; the Linux
+      # script builds the same two libraries from source — Ubuntu 24.04's
+      # libopencv-dev 4.6 / libpotrace-dev satisfy them directly).
+      - name: Install vectorizer system dependencies (Linux ARM64)
+        if: matrix.id == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopencv-dev libpotrace-dev
+
+      - name: Install vectorizer system dependencies (Intel macOS)
+        if: matrix.id == 'macos-x64'
+        run: brew install opencv potrace
 
       - name: Build and smoke-test backend bundle
         shell: bash

@@ -1,0 +1,14 @@
+# Intel macOS only: recent versions of these packages no longer publish
+# macOS x86_64 wheels, and pip would fall back to source builds that need
+# a full LLVM / LibRaw toolchain:
+#   * llvmlite dropped macosx_x86_64 wheels in 0.46.0; numba follows it.
+#     numba 0.62.1 is the last release with an Intel wheel and pairs with
+#     llvmlite 0.45.1; it also caps numpy < 2.4.
+#   * rawpy dropped macosx_x86_64 wheels after 0.25.0.
+# The pinned versions are the last ones with official Intel wheels; the
+# app uses both through long-stable APIs. Other platforms install the
+# current versions unconstrained.
+numba==0.62.1
+llvmlite==0.45.1
+rawpy==0.25.0
+numpy<2.4
