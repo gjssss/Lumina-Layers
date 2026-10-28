@@ -40,7 +40,7 @@ macOS arm64。本工作流对另外三个组合的处理：
   全部从 sdist 源码构建（`--source-native --svg-core-source`，需要 Rust
   工具链，workflow 已安装）。ARM64 后端在 Ubuntu 24.04 上构建，
   要求 glibc ≥ 2.39 的发行版。
-- **Windows ARM64**：SciPy 与上述原生包均无 win-arm64 wheel，源码构建
+- **Windows ARM64**：opencv-python 与上述原生包均无 win-arm64 wheel，源码构建
   不可行。该包是原生 ARM64 Electron 壳 + x64 后端，后端在
   Windows-on-ARM 仿真层下运行（Windows 11 ARM 的内置 x64 仿真）。
 

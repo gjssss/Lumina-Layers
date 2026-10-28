@@ -14,7 +14,7 @@ name: Desktop build
 #
 # Platform notes:
 #   * Windows ARM64 ships a native ARM64 Electron shell with an x64
-#     backend: SciPy and the pinned native 3MF/SVG packages publish no
+#     backend: OpenCV (opencv-python) and the pinned native 3MF/SVG packages publish no
 #     win-arm64 wheels, and the x64 backend runs under Windows-on-ARM
 #     emulation. The backend leg therefore uses the x64 Python.
 #   * Linux ARM64 and Intel macOS build the pinned native packages from
@@ -87,7 +87,7 @@ jobs:
             runner: windows-11-arm
             # x64 Python on purpose: the bundled backend runs emulated
             # (see the header note); there are no win-arm64 wheels for
-            # SciPy / fatcat-metadata / neroued-3mf / lumina-svg-core.
+            # opencv-python / fatcat-metadata / neroued-3mf / lumina-svg-core.
             python-arch: x64
             build-args: ""
           - id: linux-x64
@@ -120,7 +120,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build and smoke-test backend bundle
-        run: python packaging/build_backend.py ${{ matrix.build-args }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python packaging/build_backend.py ${{ matrix.build-args }} 2>&1 | tee "$RUNNER_TEMP/backend-build.log"
+
+      - name: Report backend build failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '## Backend build log (last 150 lines)'
+            echo '```text'
+            tail -n 150 "$RUNNER_TEMP/backend-build.log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload backend bundle
         uses: actions/upload-artifact@v4

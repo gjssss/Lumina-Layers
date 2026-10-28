@@ -7,7 +7,7 @@ This script is the single entry point used by the desktop build workflow
    (CI selects the interpreter architecture per leg — notably, the Windows
    ARM64 leg deliberately runs the x64 interpreter so the bundled backend
    uses the x64 wheels and runs under Windows-on-ARM emulation, because
-   SciPy and the pinned native 3MF/SVG packages publish no win-arm64 wheels);
+   opencv-python and the pinned native 3MF/SVG packages publish no win-arm64 wheels);
 2. installs ``requirements.txt`` — on legs flagged ``--source-native`` the
    pinned native packages whose wheels do not cover the target platform
    (fatcat-metadata, neroued-3mf, neroued-vectorizer, and on Linux ARM64
