@@ -158,21 +158,21 @@ def install_dependencies(python: Path, source_native: bool, svg_core_source: boo
         # fatcat-metadata / neroued-3mf come from the repository's own
         # pinned-source wheel builder, not from pip sdists.
         build_pinned_native_wheels(python)
-        pip_source = {"neroued-vectorizer"}
-        if svg_core_source:
-            pip_source.add("lumina-svg-core")
         # --no-binary makes pip build the remaining pinned packages from
-        # their published source distributions; build isolation supplies
-        # scikit-build-core/CMake (and maturin for lumina-svg-core, which
-        # additionally needs a Rust toolchain on PATH — the workflow
-        # installs one on the Linux ARM64 leg).
-        run(
-            [
-                str(python), "-m", "pip", "install",
-                "--no-binary", ",".join(sorted(pip_source)),
-                *[SOURCE_NATIVE_PINS[name] for name in sorted(pip_source)],
-            ]
-        )
+        # their published source distributions (both are scikit-build-core
+        # C++ builds; build isolation supplies CMake/pybind11). Installed
+        # one at a time so a failure names the exact package.
+        pip_source = ["neroued-vectorizer"]
+        if svg_core_source:
+            pip_source.append("lumina-svg-core")
+        for name in pip_source:
+            run(
+                [
+                    str(python), "-m", "pip", "install",
+                    "--no-binary", name,
+                    SOURCE_NATIVE_PINS[name],
+                ]
+            )
     run([str(python), "-m", "pip", "install", PYINSTALLER_REQUIREMENT])
 
 
@@ -294,7 +294,7 @@ def main() -> int:
     parser.add_argument(
         "--svg-core-source",
         action="store_true",
-        help="Also build lumina-svg-core from source (Linux ARM64; needs a Rust toolchain). Implies --source-native handling for it.",
+        help="Also build lumina-svg-core from source (Linux ARM64). Implies --source-native handling for it.",
     )
     parser.add_argument("--skip-smoke", action="store_true", help="Skip the frozen-executable smoke tests.")
     args = parser.parse_args()

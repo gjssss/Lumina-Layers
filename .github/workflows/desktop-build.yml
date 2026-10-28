@@ -18,9 +18,10 @@ name: Desktop build
 #     win-arm64 wheels, and the x64 backend runs under Windows-on-ARM
 #     emulation. The backend leg therefore uses the x64 Python.
 #   * Linux ARM64 and Intel macOS build the pinned native packages from
-#     their published source distributions (no wheels exist for those
-#     platforms); Linux ARM64 additionally builds lumina-svg-core from
-#     source and needs the Rust toolchain installed below.
+#     source (no wheels exist for those platforms): fatcat-metadata and
+#     neroued-3mf via the repository's own pinned-source wheel builder,
+#     neroued-vectorizer from its sdist; Linux ARM64 additionally builds
+#     lumina-svg-core from its sdist.
 
 on:
   workflow_dispatch:
@@ -115,10 +116,6 @@ jobs:
           python-version: "3.12"
           architecture: ${{ matrix.python-arch }}
 
-      - name: Set up Rust (lumina-svg-core source build)
-        if: matrix.id == 'linux-arm64'
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Build and smoke-test backend bundle
         shell: bash
         run: |
@@ -135,8 +132,14 @@ jobs:
             tail -n 150 "$RUNNER_TEMP/backend-build.log" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # Mirror the decisive last lines into job annotations so the
-          # failure is readable through the API without the log viewer.
+          # Mirror the decisive lines into job annotations so the failure
+          # is readable through the API without the log viewer: the echoed
+          # commands plus error-looking lines, then the log tail.
+          grep -E '^\[build_backend\] \+|ERROR|Error|error:|Could not|No such|not found|Failed' \
+            "$RUNNER_TEMP/backend-build.log" | tail -n 14 | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
+            echo "::error title=backend-log-key::$esc"
+          done
           tail -n 12 "$RUNNER_TEMP/backend-build.log" | while IFS= read -r line; do
             esc=$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g')
             echo "::error title=backend-log-tail::$esc"
