@@ -133,7 +133,13 @@ jobs:
 
       - name: Install vectorizer system dependencies (Intel macOS)
         if: matrix.id == 'macos-x64'
-        run: brew install opencv potrace
+        run: |
+          # opencv@4, not opencv: the vectorizer asks CMake for
+          # OpenCV 4.5 and a 5.x config is rejected as incompatible.
+          # The versioned formula is keg-only, so publish its prefix
+          # for the build step's CMake.
+          brew install opencv@4 potrace
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix opencv@4)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and smoke-test backend bundle
         shell: bash
