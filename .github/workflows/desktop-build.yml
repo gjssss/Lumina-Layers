@@ -27,6 +27,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "ci/desktop-build-test"  # TEMPORARY: CI verification branch, removed after the first green run
 
 permissions:
   contents: read
